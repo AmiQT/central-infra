@@ -1,8 +1,8 @@
-# Central-Infra: Centralized Infrastructure-as-Code (IaC) Sandbox
+# Central-Infra: Enterprise-Grade Infrastructure-as-Code (IaC) Sandbox
 
-🚀 **A modular, multi-tier Kubernetes environment built locally for production simulation and testing.** 
+🚀 **A modular, multi-tier Kubernetes environment built locally for production simulation and testing.**
 
-This project simulates a production-grade Kubernetes environment on a local machine using **k3d**, orchestrated fully through **Terraform** and **Helm**. It features isolated architectural layers, encompassing Cluster Provisioning, Ingress Networking, Observability (Prometheus/Grafana), and customized pre-configured RBAC rules.
+This project simulates a production-grade Kubernetes environment on a local machine using **k3d**, orchestrated fully through **Terraform** and **Helm**. It features isolated architectural layers, encompassing Cluster Provisioning with an integrated Local Container Registry, Ingress Networking, Observability (Prometheus/Grafana), Least-Privilege RBAC rules, and secure workload deployments.
 
 ---
 
@@ -11,22 +11,23 @@ This project simulates a production-grade Kubernetes environment on a local mach
 To prevent Terraform provider dependency deadlocks, the infrastructure is broken down into **4 distinct layers**, allowing independent provisioning and tear-downs:
 
 - **Layer 1: Cluster (`layer1-cluster`)**
-  - Automates **k3d** cluster creation.
-  - Provisions a simulated distributed environment (1 Server Node, 2 Agent Nodes).
-  - Dynamically extracts and rewrites the `kubeconfig.yaml` to ensure seamless `kubectl` access on the host machine.
+  - Automates **k3d** cluster creation (1 Server, 2 Agents).
+  - Provisions a **Local Container Registry** (`localhost:5001`) natively linked to the cluster.
+  - Dynamically extracts and rewrites `kubeconfig.yaml` to ensure seamless `kubectl` access on the host machine.
 
 - **Layer 2: Platform (`layer2-platform`)**
-  - Installs core cluster extensions via **Helm**.
+  - Installs core platform extensions via **Helm** with pinned chart versions for absolute stability.
   - **Networking:** NGINX Ingress Controller for traffic routing.
   - **Observability:** `kube-prometheus-stack` (Prometheus & Grafana integrated).
 
 - **Layer 3: Apps & Security (`layer3-apps`)**
-  - Configures **Namespaces** (e.g., `gopher-ops`).
-  - Sets up **RBAC** (Role-Based Access Control) including custom ServiceAccounts, ClusterRoles, and ClusterRoleBindings for bot and operator accesses.
+  - Configures dedicated namespaces (e.g., `gopher-ops`).
+  - Sets up **Least-Privilege RBAC** rules (scoping roles and bindings at the Namespace level rather than Cluster-wide).
 
 - **Layer 4: Workloads (`layer4-workloads`)**
-  - Contains Kubernetes Deployments and Services for target applications.
-  - Showcases proof-of-concept deployment utilizing Docker images directly on the cluster.
+  - Deploys application containers (e.g., `talent-api`) with active **Liveness** and **Readiness probes** for high availability.
+  - Features hardcoded pod security contexts and Prometheus scraping annotations.
+  - Exposes workloads through standard NGINX Ingress hosts (`talent-api.local`).
 
 ---
 
@@ -37,71 +38,44 @@ Before you begin, ensure you have the following installed on your machine:
 - [k3d](https://k3d.io/)
 - [Terraform](https://developer.hashicorp.com/terraform/downloads)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
-- Helm (optional, as Terraform utilizes the Helm provider internally)
+- Make (optional, for running the orchestration tasks)
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Orchestration with Makefile
 
-Deploy the sandbox by initializing and applying Terraform configurations in sequential order. 
+Manage the entire multi-tier cluster lifecycle using a single command from the root directory.
 
-**Note for Windows Users:** The `kubeconfig.yaml` is dynamically generated and fixed inside `layer1-cluster` to map to `127.0.0.1`. Export it using `$env:KUBECONFIG="<path-to-layer1>/kubeconfig.yaml"` before querying the cluster.
-
-### Step 1: Provision the Cluster
-```bash
-cd layer1-cluster
-terraform init
-terraform apply -auto-approve
-```
-
-### Step 2: Deploy Platform Services (Ingress & Observability)
-```bash
-cd ../layer2-platform
-terraform init
-terraform apply -auto-approve
-```
-
-### Step 3: Setup RBAC & App Namespaces
-```bash
-cd ../layer3-apps
-terraform init
-terraform apply -auto-approve
-```
-
-### Step 4: Deploy Workloads
-```bash
-cd ../layer4-workloads
-terraform init
-terraform apply -auto-approve
-```
+| Command | Action |
+| :--- | :--- |
+| `make init` | Run `terraform init` across all layers sequentially |
+| `make validate` | Validate the syntax of all Terraform layers |
+| `make up` | Provision the entire environment (Layer 1 ➔ 4) in sequential order |
+| `make down` | Tear down the entire environment (Layer 4 ➔ 1) in reverse order to prevent deadlocks |
+| `make status` | Query nodes, pods, and ingress rules across the cluster |
+| `make clean` | Remove local Terraform state backup files |
 
 ---
 
-## 🔍 Verifying the Setup
+## 🐳 Local Container Registry Workflow
 
-Check if the pods in the system are running smoothly:
+This platform features an integrated local registry on port `5001` (associated as `k3d-central-infra-registry.localhost:5001`). You can build, push, and pull images without using any external registry!
+
+### Step 1: Build and Tag your application image
 ```bash
-kubectl get pods -A
+docker build -t localhost:5001/talent-api:latest .
 ```
-Access the Kubernetes Web Dashboard or Grafana by port-forwarding their respective services.
+
+### Step 2: Push to the Local Registry
+```bash
+docker push localhost:5001/talent-api:latest
+```
+
+### Step 3: Deploy to the Cluster
+Update your Kubernetes deployment in Layer 4 (`layer4-workloads/variables.tf` or `main.tf`) to use `k3d-central-infra-registry.localhost:5001/talent-api:latest` as the image name. Kubernetes will pull it instantly from the local registry!
 
 ---
 
-## 🧹 Clean Up
-
-To completely wipe out the environment and free up local resources, destroy the layers in **reverse order**:
-
-```bash
-cd layer4-workloads && terraform destroy -auto-approve
-cd ../layer3-apps && terraform destroy -auto-approve
-cd ../layer2-platform && terraform destroy -auto-approve
-cd ../layer1-cluster && terraform destroy -auto-approve
-```
-
-*(Finally, you can also run `k3d cluster delete central-infra-lab` recursively if needed).*
-
----
-
-### 👨‍💻 Author
-**Noorazami**
+## 👨‍💻 Author
+**AmiQT**  
 *Platform Engineer & SRE*

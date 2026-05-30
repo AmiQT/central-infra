@@ -1,10 +1,15 @@
 output "cluster_name" {
-  description = "Name of the k3d cluster we just spun up"
-  value       = "central-infra-lab"
+  description = "The name of the provisioned k3d Kubernetes cluster"
+  value       = var.cluster_name
+}
+
+output "kubeconfig_path" {
+  description = "The absolute path to the generated kubeconfig file on the host system"
+  value       = data.local_file.kubeconfig.filename
 }
 
 output "kubeconfig_raw" {
-  description = "Raw kubeconfig to be passed to layer 2"
+  description = "The raw contents of the generated kubeconfig file"
   value       = data.local_file.kubeconfig.content
-  sensitive   = true # Jangan leak kat terminal tau!
+  sensitive   = true
 }
