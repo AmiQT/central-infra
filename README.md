@@ -1,12 +1,12 @@
 # Central-Infra: Enterprise-Grade Infrastructure-as-Code (IaC) Sandbox
 
-🚀 **A modular, multi-tier Kubernetes environment built locally for production simulation and testing.**
+**A modular, multi-tier Kubernetes environment built locally for production simulation and testing.**
 
 This project simulates a production-grade Kubernetes environment on a local machine using **k3d**, orchestrated fully through **Terraform** and **Helm**. It features isolated architectural layers, encompassing Cluster Provisioning with an integrated Local Container Registry, Ingress Networking, Observability (Prometheus/Grafana), Least-Privilege RBAC rules, and secure workload deployments.
 
 ---
 
-## 🏗️ Architecture & Layers
+## Architecture & Layers
 
 To prevent Terraform provider dependency deadlocks, the infrastructure is broken down into **4 distinct layers**, allowing independent provisioning and tear-downs:
 
@@ -31,7 +31,7 @@ To prevent Terraform provider dependency deadlocks, the infrastructure is broken
 
 ---
 
-## 🛠️ Prerequisites
+## Prerequisites
 
 Before you begin, ensure you have the following installed on your machine:
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Running)
@@ -42,7 +42,7 @@ Before you begin, ensure you have the following installed on your machine:
 
 ---
 
-## 🚀 Orchestration with Makefile
+## Orchestration with Makefile
 
 Manage the entire multi-tier cluster lifecycle using a single command from the root directory.
 
@@ -57,7 +57,7 @@ Manage the entire multi-tier cluster lifecycle using a single command from the r
 
 ---
 
-## 🐳 Local Container Registry Workflow
+## Local Container Registry Workflow
 
 This platform features an integrated local registry on port `5001` (associated as `k3d-central-infra-registry.localhost:5001`). You can build, push, and pull images without using any external registry!
 
@@ -76,6 +76,6 @@ Update your Kubernetes deployment in Layer 4 (`layer4-workloads/variables.tf` or
 
 ---
 
-## 👨‍💻 Author
+## Author
 **AmiQT**  
 *Platform Engineer & SRE*
