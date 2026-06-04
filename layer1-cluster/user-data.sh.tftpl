@@ -57,7 +57,10 @@ systemctl daemon-reload
 systemctl enable --now refresh-ecr-auth.timer
 
 # --- Install single-node k3s (reads registries.yaml at startup) ---
-export INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --tls-san $EIP"
+# Disable unused bundled components (traefik ingress, metrics-server) to free
+# ~200MB of RAM on the 1GB t3.micro so the SSM agent worker stays responsive.
+# servicelb is kept because the workload uses a Service of type LoadBalancer.
+export INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --tls-san $EIP --disable traefik --disable metrics-server"
 curl -sfL https://get.k3s.io | sh -
 
 # --- Baseline workload (public image so the URL works before the first CI deploy) ---
