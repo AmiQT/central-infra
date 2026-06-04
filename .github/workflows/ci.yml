@@ -1,0 +1,78 @@
+name: CI
+
+# Validates the Terraform IaC and bash provisioners on every push/PR.
+# No live cluster is required — formatting, validation, and static security
+# scanning all run offline, so the pipeline is fast and safe for PRs.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (fmt + shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      # Enforce canonical HCL formatting across every layer.
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      # Lint the bash provisioners we externalized out of Layer 1.
+      - name: ShellCheck bash scripts
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./layer1-cluster/scripts
+
+  validate:
+    name: Validate (${{ matrix.layer }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layer:
+          - layer1-cluster
+          - layer2-platform
+          - layer3-apps
+          - layer4-workloads
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      # -backend=false: init providers without touching state or the cluster.
+      - name: Terraform init
+        run: terraform -chdir=${{ matrix.layer }} init -backend=false
+
+      # validate is offline — it never connects to the Kubernetes API.
+      - name: Terraform validate
+        run: terraform -chdir=${{ matrix.layer }} validate
+
+  security:
+    name: Security scan (IaC misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Trivy scans the Terraform/Kubernetes manifests for misconfigurations
+      # (e.g. missing security contexts, privilege escalation, weak RBAC).
+      # exit-code 0 = report-only for now; flip to "1" to gate merges once the
+      # baseline findings are triaged.
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "0"

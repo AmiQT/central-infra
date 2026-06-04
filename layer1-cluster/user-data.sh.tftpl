@@ -1,0 +1,113 @@
+#!/bin/bash
+# Self-bootstrap — runs ONCE on first boot. No SSH involved.
+# Installs single-node k3s (with ECR pull auth) and publishes its kubeconfig to
+# SSM Parameter Store so the host can pull it keylessly.
+set -euxo pipefail
+
+REGION="${aws_region}"
+EIP="${eip}"
+ECR_REGISTRY="${ecr_registry}"
+
+# --- AWS CLI v2 (mints ECR tokens + pushes the kubeconfig to SSM) ---
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y unzip curl
+curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -q /tmp/awscliv2.zip -d /tmp
+/tmp/aws/install
+
+# --- ECR pull credentials for k3s (written BEFORE k3s starts) ---
+# ECR tokens last 12h, so a systemd timer refreshes them. The instance's IAM
+# role (AmazonEC2ContainerRegistryReadOnly) authorizes the token request.
+mkdir -p /etc/rancher/k3s
+cat >/usr/local/bin/refresh-ecr-auth.sh <<EOS
+#!/bin/bash
+set -euo pipefail
+TOKEN=\$(aws ecr get-login-password --region $REGION)
+cat >/etc/rancher/k3s/registries.yaml <<REG
+configs:
+  "$ECR_REGISTRY":
+    auth:
+      username: AWS
+      password: \$TOKEN
+REG
+# Reload k3s so containerd picks up refreshed creds (no-op on first run).
+systemctl is-active --quiet k3s && systemctl restart k3s || true
+EOS
+chmod +x /usr/local/bin/refresh-ecr-auth.sh
+/usr/local/bin/refresh-ecr-auth.sh
+
+cat >/etc/systemd/system/refresh-ecr-auth.service <<'EOF'
+[Unit]
+Description=Refresh ECR pull credentials for k3s
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/refresh-ecr-auth.sh
+EOF
+cat >/etc/systemd/system/refresh-ecr-auth.timer <<'EOF'
+[Unit]
+Description=Run ECR credential refresh every 6h
+[Timer]
+OnUnitActiveSec=6h
+OnBootSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now refresh-ecr-auth.timer
+
+# --- Install single-node k3s (reads registries.yaml at startup) ---
+export INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --tls-san $EIP"
+curl -sfL https://get.k3s.io | sh -
+
+# --- Baseline workload (public image so the URL works before the first CI deploy) ---
+# CI later swaps this to the ECR image via SSM Run Command.
+mkdir -p /var/lib/rancher/k3s/server/manifests
+cat >/var/lib/rancher/k3s/server/manifests/talent-api.yaml <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talent-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: talent-api }
+  template:
+    metadata:
+      labels: { app: talent-api }
+    spec:
+      containers:
+        - name: talent-api
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: talent-api
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector: { app: talent-api }
+  ports:
+    - port: 80
+      targetPort: 80
+EOF
+
+# --- Publish kubeconfig to SSM (server rewritten from localhost to the EIP) ---
+until [ -f /etc/rancher/k3s/k3s.yaml ]; do sleep 3; done
+sed "s/127.0.0.1/$EIP/g" /etc/rancher/k3s/k3s.yaml >/tmp/kubeconfig.yaml
+aws ssm put-parameter \
+  --region "$REGION" \
+  --name "/central-infra/kubeconfig" \
+  --type SecureString \
+  --overwrite \
+  --value "$(cat /tmp/kubeconfig.yaml)"
+rm -f /tmp/kubeconfig.yaml
+
+echo "k3s ready with ECR auth — kubeconfig published to SSM."

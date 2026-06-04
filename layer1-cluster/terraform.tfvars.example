@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars to provision on AWS instead of local k3d.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Find your public IP for admin_cidr:  curl ifconfig.me
+# Leaving admin_cidr open (0.0.0.0/0) exposes the kube API to the world — don't.
+
+cluster_mode  = "aws-ec2"
+aws_region    = "ap-southeast-1"
+instance_type = "t3.large"
+admin_cidr    = "YOUR.IP.HERE/32"
