@@ -3,6 +3,9 @@ name: CD - App to AWS k3s
 # Real CI->deploy loop: build the app, push to ECR (keyless via OIDC), scan it,
 # then tell the k3s node to roll the new image via SSM Run Command.
 # CI never holds a kubeconfig and the kube API is never exposed to CI.
+#
+# No account ID in source: the role ARN comes from the repo variable AWS_ROLE_ARN
+# and the ECR registry is derived at runtime after authentication.
 on:
   workflow_dispatch:
   push:
@@ -17,9 +20,6 @@ permissions:
 
 env:
   AWS_REGION: ap-southeast-1
-  # From layer0 outputs (github_actions_role_arn / ecr_repository_url).
-  AWS_ROLE_ARN: arn:aws:iam::131127508511:role/central-infra-github-actions
-  ECR_REGISTRY: 131127508511.dkr.ecr.ap-southeast-1.amazonaws.com
   ECR_REPO: central-infra/talent-api
 
 jobs:
@@ -31,8 +31,11 @@ jobs:
       - name: Configure AWS credentials (OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Derive ECR registry from the authenticated account
+        run: echo "ECR_REGISTRY=$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_ENV"
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
