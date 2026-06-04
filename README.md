@@ -1,19 +1,25 @@
 # Central-Infra: Enterprise-Grade Infrastructure-as-Code (IaC) Sandbox
 
-**A modular, multi-tier Kubernetes environment built locally for production simulation and testing.**
+**A modular, multi-tier Kubernetes platform with a pluggable cluster layer that runs the same stack locally (k3d) or on AWS (k3s on EC2).**
 
-This project simulates a production-grade Kubernetes environment on a local machine using **k3d**, orchestrated fully through **Terraform** and **Helm**. It features isolated architectural layers, encompassing Cluster Provisioning with an integrated Local Container Registry, Ingress Networking, Observability (Prometheus/Grafana), Least-Privilege RBAC rules, and secure workload deployments.
+This project provisions a production-style Kubernetes environment, orchestrated fully through **Terraform** and **Helm**. It features isolated architectural layers covering Cluster Provisioning, Ingress Networking, Observability (Prometheus/Grafana), Least-Privilege RBAC, and secure workload deployments — plus a **keyless GitHub Actions CI/CD pipeline** that builds to **Amazon ECR** and deploys to the cluster.
+
+The cluster layer is **pluggable**: `cluster_mode = "k3d"` spins up a local cluster with an integrated container registry, while `cluster_mode = "aws-ec2"` provisions single-node k3s on EC2 — keyless (SSM, no SSH), with the same Layer 2-4 stack deploying unchanged on top. This demonstrates a clean local ↔ cloud (hybrid) story.
 
 ---
 
 ## Architecture & Layers
 
-To prevent Terraform provider dependency deadlocks, the infrastructure is broken down into **4 distinct layers**, allowing independent provisioning and tear-downs:
+To prevent Terraform provider dependency deadlocks, the infrastructure is broken into **isolated layers**, allowing independent provisioning and tear-downs:
 
-- **Layer 1: Cluster (`layer1-cluster`)**
-  - Automates **k3d** cluster creation (1 Server, 2 Agents).
-  - Provisions a **Local Container Registry** (`localhost:5001`) natively linked to the cluster.
-  - Dynamically extracts and rewrites `kubeconfig.yaml` to ensure seamless `kubectl` access on the host machine.
+- **Layer 0: Bootstrap (`layer0-bootstrap`)** *(AWS, optional)*
+  - Provisions the **remote state backend** (S3 with versioning + encryption, DynamoDB locking).
+  - Creates the **ECR** repository and a **GitHub OIDC role** so CI authenticates **without static keys**.
+
+- **Layer 1: Cluster (`layer1-cluster`)** — **pluggable** via `cluster_mode`
+  - `k3d` mode: local cluster (1 Server, 2 Agents) + integrated registry (`localhost:5001`), provisioned by shellcheck-clean bash scripts.
+  - `aws-ec2` mode: single-node **k3s on EC2** — keyless (SSM Session Manager, **no SSH**), publishes its kubeconfig to SSM Parameter Store.
+  - Either way, emits a host `kubeconfig.yaml` so Layers 2-4 consume it transparently.
 
 - **Layer 2: Platform (`layer2-platform`)**
   - Installs core platform extensions via **Helm** with pinned chart versions for absolute stability.
@@ -39,6 +45,7 @@ Before you begin, ensure you have the following installed on your machine:
 - [Terraform](https://developer.hashicorp.com/terraform/downloads)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - Make (optional, for running the orchestration tasks)
+- For **AWS mode** only: [AWS CLI](https://aws.amazon.com/cli/) configured with credentials (`aws configure`)
 
 ---
 
@@ -73,6 +80,42 @@ docker push localhost:5001/talent-api:latest
 
 ### Step 3: Deploy to the Cluster
 Update your Kubernetes deployment in Layer 4 (`layer4-workloads/variables.tf` or `main.tf`) to use `k3d-central-infra-registry.localhost:5001/talent-api:latest` as the image name. Kubernetes will pull it instantly from the local registry!
+
+---
+
+## Cloud / Hybrid Mode (AWS)
+
+Run the **same** stack on AWS instead of locally — no code changes to Layers 2-4.
+
+1. **Bootstrap** the foundation (remote state, ECR, OIDC):
+   ```bash
+   cd layer0-bootstrap && terraform init && terraform apply
+   ```
+2. **Point Layer 1 at AWS** — copy the example tfvars and set your IP:
+   ```bash
+   cd ../layer1-cluster
+   cp terraform.tfvars.example terraform.tfvars   # set cluster_mode = "aws-ec2" and admin_cidr = "<your-ip>/32"
+   ```
+3. **Provision** — the EC2 node self-bootstraps k3s via cloud-init (no SSH):
+   ```bash
+   terraform apply
+   terraform output app_url        # e.g. http://<node-ip>/  ← never hardcode this; it changes per rebuild
+   ```
+
+**Security posture:** no SSH (access via SSM Session Manager), the kube API (6443) is restricted to `admin_cidr`, only port 80 is public, and the node pulls from ECR using its IAM instance role (no static keys).
+
+> Free-tier note: a 1 GB `t3.micro` runs k3s + a lightweight workload. The full observability stack (Prometheus + ArgoCD) is intended for local k3d or a larger instance.
+
+---
+
+## CI/CD Pipeline
+
+Two keyless GitHub Actions workflows (`.github/workflows/`):
+
+- **`ci.yml`** — on every PR/push: `terraform fmt` + `validate` (all layers), `shellcheck` the bash provisioners, and a **Trivy** IaC misconfiguration scan.
+- **`cd-app.yml`** — on changes under `app/`: authenticate via **OIDC** (no static AWS keys), build the image, push to **ECR** with a git-SHA tag, **Trivy** image scan, then deploy to k3s via **SSM Run Command** — CI never holds a kubeconfig and the kube API is never exposed to CI.
+
+The AWS account ID is **not** committed: the role ARN comes from the `AWS_ROLE_ARN` repo variable and the ECR registry is derived at runtime.
 
 ---
 
